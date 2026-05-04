@@ -1,0 +1,517 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  Camera, 
+  CheckCircle2, 
+  Gift, 
+  Lock, 
+  Plus, 
+  X, 
+  Trash2, 
+  TrendingUp, 
+  Droplets, 
+  Dumbbell, 
+  Heart,
+  Moon,
+  Apple,
+  Utensils,
+  PlusCircle,
+  Loader2,
+  LogOut,
+  ShoppingBag
+} from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, doc, setDoc, onSnapshot, addDoc, updateDoc, deleteDoc, getDoc, query } from 'firebase/firestore';
+
+// --- CONFIGURAÇÃO FIREBASE ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'vitgym-app-v3';
+
+// --- LISTA COMPLETA DE METAS ---
+const METAS_COMPLETAS = [
+  { nome: "Musculação", pontos: 5, categoria: "Treino" },
+  { nome: "Cardio (30 min)", pontos: 5, categoria: "Treino" },
+  { nome: "Cardio (20 min)", pontos: 2, categoria: "Treino" },
+  { nome: "Beber 2L de Água", pontos: 5, categoria: "Saúde" },
+  { nome: "Consistência (5 dias)", pontos: 15, categoria: "Bônus" },
+  { nome: "Refeição Saudável", pontos: 3, categoria: "Dieta" },
+  { nome: "Nova Receita Fit", pontos: 10, categoria: "Dieta" },
+  { nome: "Caminhada (40 min)", pontos: 8, categoria: "Treino" },
+  { nome: "Noite de Sono (7h+)", pontos: 5, categoria: "Saúde" },
+  { nome: "Dormir até às 10:30 (fds)", pontos: 10, categoria: "Saúde" },
+  { nome: "Ajudar a mãe", pontos: 5, categoria: "Social" },
+  { nome: "Fazer massagem (15 min)", pontos: 20, categoria: "Extra" },
+  { nome: "Cardio (+18)", pontos: 10, categoria: "Extra" },
+  { nome: "Tomar creatina", pontos: 3, categoria: "Saúde" },
+  { nome: "Comer frutas", pontos: 3, categoria: "Dieta" },
+  { nome: "Tratamento H. pylori", pontos: 3000, categoria: "Especial" },
+  { nome: "Cirurgia Joelho", pontos: 3000, categoria: "Especial" }
+];
+
+// --- LISTA COMPLETA DA LOJA ---
+const LOJA_COMPLETA = [
+  { name: "Conjunto Academia (Até R$200)", price: 1300, img: "https://images.unsplash.com/photo-1518310383802-640c2de311b2?w=400" },
+  { name: "Jantar Especial", price: 1600, img: "https://images.unsplash.com/photo-1559339352-11d035aa65de?w=400" },
+  { name: "Conjunto Academia (Até R$ 40)", price: 700, img: "https://images.unsplash.com/photo-1556940113-997371d6446e?w=400" },
+  { name: "Refeição Livre Ifood", price: 850, img: "https://images.unsplash.com/photo-1526367790999-0150786686a2?w=400" },
+  { name: "Perfume Importado", price: 3400, img: "https://images.unsplash.com/photo-1541643600914-78b084683601?w=400" },
+  { name: "Shein (Vale R$500)", price: 3000, img: "https://images.unsplash.com/photo-1512436991641-6745cdb1723f?w=400" },
+  { name: "Roupas/Acessórios (Até R$150)", price: 1050, img: "https://images.unsplash.com/photo-1525507119028-ed4c629a60a3?w=400" },
+  { name: "Roupas/Acessórios (Até R$500)", price: 2100, img: "https://images.unsplash.com/photo-1445205170230-053b83016050?w=400" },
+  { name: "Shein (Vale R$1.000)", price: 6000, img: "https://images.unsplash.com/photo-1483985988355-763728e1935b?w=400" }
+];
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [activeTab, setActiveTab] = useState('feed');
+  const [balance, setBalance] = useState(0);
+  const [checkins, setCheckins] = useState([]);
+  const [metas, setMetas] = useState([]);
+  const [shopItems, setShopItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [newCheckin, setNewCheckin] = useState({ activity: '', caption: '', photo: null });
+  const [isProcessing, setIsProcessing] = useState(false);
+  
+  const fileInputRef = useRef(null);
+
+  // Admin
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminPass, setAdminPass] = useState('');
+
+  useEffect(() => {
+    const initAuth = async () => {
+      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        await signInWithCustomToken(auth, __initial_auth_token);
+      } else {
+        await signInAnonymously(auth);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const userStatsRef = doc(db, 'artifacts', appId, 'users', user.uid, 'stats', 'current');
+    const checkinsCol = collection(db, 'artifacts', appId, 'public', 'data', 'checkins');
+    const metasCol = collection(db, 'artifacts', appId, 'public', 'data', 'metas');
+    const shopCol = collection(db, 'artifacts', appId, 'public', 'data', 'shop');
+
+    const unsubStats = onSnapshot(userStatsRef, (snap) => {
+      if (snap.exists()) setBalance(snap.data().points || 0);
+      else setDoc(userStatsRef, { points: 0 });
+      setLoading(false);
+    });
+
+    const unsubCheckins = onSnapshot(checkinsCol, (snap) => {
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setCheckins(list.sort((a, b) => b.timestamp - a.timestamp));
+    });
+
+    const unsubMetas = onSnapshot(metasCol, (snap) => {
+      if (snap.empty) {
+        METAS_COMPLETAS.forEach(m => addDoc(metasCol, m));
+      } else {
+        setMetas(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      }
+    });
+
+    const unsubShop = onSnapshot(shopCol, (snap) => {
+      if (snap.empty) {
+        LOJA_COMPLETA.forEach(i => addDoc(shopCol, i));
+      } else {
+        setShopItems(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      }
+    });
+
+    return () => { unsubStats(); unsubCheckins(); unsubMetas(); unsubShop(); };
+  }, [user]);
+
+  const handlePhotoUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => setNewCheckin(p => ({ ...p, photo: reader.result }));
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleAddCheckin = async () => {
+    if (!user || !newCheckin.activity) return;
+    setIsProcessing(true);
+    const meta = metas.find(m => m.nome === newCheckin.activity);
+    
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'checkins'), {
+        activity: newCheckin.activity,
+        points: meta?.pontos || 0,
+        caption: newCheckin.caption,
+        photo: newCheckin.photo,
+        status: 'Pendente',
+        userName: "Vitória",
+        userId: user.uid,
+        timestamp: Date.now(),
+        date: new Date().toLocaleDateString('pt-BR')
+      });
+      setIsModalOpen(false);
+      setNewCheckin({ activity: '', caption: '', photo: null });
+    } catch (e) { console.error(e); }
+    setIsProcessing(false);
+  };
+
+  const approveCheckin = async (c) => {
+    if (!isAdmin) return;
+    try {
+      const userRef = doc(db, 'artifacts', appId, 'users', c.userId, 'stats', 'current');
+      const snap = await getDoc(userRef);
+      const currentPoints = snap.exists() ? snap.data().points : 0;
+      
+      await updateDoc(userRef, { points: currentPoints + c.points });
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'checkins', c.id), { status: 'Aprovado' });
+    } catch (e) { console.error(e); }
+  };
+
+  const deleteCheckin = async (id) => {
+    if (confirm("Excluir postagem?")) {
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'checkins', id));
+    }
+  };
+
+  const buyItem = async (item) => {
+    if (balance < item.price) return alert("Saldo insuficiente!");
+    if (confirm(`Resgatar ${item.name}?`)) {
+      const userRef = doc(db, 'artifacts', appId, 'users', user.uid, 'stats', 'current');
+      await updateDoc(userRef, { points: balance - item.price });
+      alert("Resgate solicitado com sucesso!");
+    }
+  };
+
+  const resetDatabase = async () => {
+    if(confirm("Deseja realmente resetar metas e loja para o padrão?")) {
+      // Nota: No Firestore real, você deletaria os docs. Aqui apenas sugerimos o reset de estado.
+      alert("Ação restrita. Fale com o desenvolvedor.");
+    }
+  };
+
+  if (loading) return (
+    <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center gap-4">
+      <Loader2 className="w-12 h-12 text-orange-500 animate-spin" />
+      <p className="text-orange-500 font-black tracking-widest uppercase text-xs">Carregando VitGym...</p>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-slate-50 pb-28 font-sans text-slate-900">
+      {/* HEADER FIXO */}
+      <header className="bg-gradient-to-br from-orange-500 via-red-500 to-red-600 p-6 text-white rounded-b-[3rem] shadow-2xl sticky top-0 z-40 border-b-4 border-black/10">
+        <div className="max-w-md mx-auto flex justify-between items-center">
+          <div className="flex flex-col">
+            <span className="text-orange-100 text-[10px] font-black uppercase tracking-[0.2em] mb-1">Workout Tracker</span>
+            <h1 className="text-3xl font-black italic tracking-tighter flex items-center gap-2">
+              VIT<span className="text-black bg-white px-2 py-0.5 rounded-lg not-italic">GYM</span>
+            </h1>
+          </div>
+          <div className="bg-black/20 backdrop-blur-xl px-5 py-2 rounded-2xl border border-white/20 shadow-inner flex flex-col items-center">
+            <span className="text-[9px] uppercase font-black text-orange-200 tracking-tighter">Pontos Acumulados</span>
+            <span className="text-2xl font-black tabular-nums">{balance.toLocaleString('pt-BR')}</span>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-md mx-auto p-4 space-y-8">
+        {/* CONTEÚDO BASEADO NA TAB */}
+        {activeTab === 'feed' && (
+          <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="flex justify-between items-end mb-6 px-2">
+              <div>
+                <h2 className="text-2xl font-black text-slate-800 italic uppercase leading-none">Timeline</h2>
+                <p className="text-slate-400 text-xs font-bold mt-1">Veja seus últimos progressos</p>
+              </div>
+              <button onClick={() => setIsModalOpen(true)} className="bg-orange-500 text-white w-14 h-14 rounded-2xl shadow-xl shadow-orange-200 flex items-center justify-center hover:scale-105 active:scale-90 transition-all border-b-4 border-orange-700">
+                <Plus size={28} strokeWidth={3} />
+              </button>
+            </div>
+
+            <div className="space-y-6">
+              {checkins.length === 0 ? (
+                <div className="bg-white rounded-[2rem] p-12 text-center border-2 border-dashed border-slate-200">
+                  <Camera size={40} className="mx-auto text-slate-200 mb-4" />
+                  <p className="text-slate-400 font-bold italic">Nenhum treino hoje? <br/>Poste sua primeira foto!</p>
+                </div>
+              ) : (
+                checkins.map(c => (
+                  <div key={c.id} className="bg-white rounded-[2.5rem] shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden group">
+                    {c.photo && (
+                      <div className="relative">
+                         <img src={c.photo} className="w-full h-80 object-cover" alt="Check-in" />
+                         <div className="absolute top-4 left-4 bg-black/50 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/20">
+                            <span className="text-[10px] text-white font-black uppercase tracking-widest">{c.date}</span>
+                         </div>
+                      </div>
+                    )}
+                    <div className="p-6">
+                      <div className="flex justify-between items-start mb-4">
+                        <div className="flex flex-col">
+                          <span className={`text-[10px] font-black uppercase mb-1 tracking-widest ${c.status === 'Aprovado' ? 'text-emerald-500' : 'text-amber-500'}`}>
+                            ● {c.status}
+                          </span>
+                          <h3 className="font-black text-xl text-slate-800 leading-tight">{c.activity}</h3>
+                        </div>
+                        <div className="bg-orange-50 text-orange-600 px-3 py-2 rounded-xl flex items-center gap-1 font-black text-sm">
+                          <TrendingUp size={16} /> +{c.points}
+                        </div>
+                      </div>
+                      
+                      {c.caption && (
+                        <div className="bg-slate-50 p-4 rounded-2xl mb-4 border-l-4 border-orange-500">
+                          <p className="text-sm text-slate-600 italic">"{c.caption}"</p>
+                        </div>
+                      )}
+
+                      <div className="flex justify-end">
+                        <button onClick={() => deleteCheckin(c.id)} className="text-slate-200 hover:text-red-500 transition-colors p-2"><Trash2 size={18} /></button>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'metas' && (
+          <div className="animate-in fade-in slide-in-from-right-4">
+             <div className="mb-8 px-2">
+                <h2 className="text-2xl font-black text-slate-800 italic uppercase leading-none">Tabela de Ganhos</h2>
+                <p className="text-slate-400 text-xs font-bold mt-1">Atividades e suas recompensas</p>
+              </div>
+            
+            <div className="grid gap-3">
+              {metas.sort((a,b) => b.pontos - a.pontos).map((m, i) => (
+                <div key={i} className="flex justify-between items-center bg-white p-4 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow group">
+                  <div className="flex items-center gap-4">
+                    <div className="bg-gradient-to-br from-orange-400 to-red-500 p-2.5 rounded-xl text-white shadow-lg group-hover:rotate-12 transition-transform">
+                      {m.nome.includes('Água') ? <Droplets size={20}/> : 
+                       m.nome.includes('Sono') ? <Moon size={20}/> :
+                       m.nome.includes('Refeição') ? <Utensils size={20}/> : <Dumbbell size={20}/>}
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="font-black text-sm text-slate-800">{m.nome}</span>
+                      <span className="text-[10px] text-slate-400 font-bold uppercase tracking-tight">{m.categoria || 'Treino'}</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center">
+                    <span className="bg-slate-900 text-white px-4 py-1.5 rounded-xl font-black text-xs shadow-lg">+{m.pontos}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'shop' && (
+          <div className="animate-in fade-in slide-in-from-left-4">
+            <div className="mb-8 px-2">
+              <h2 className="text-2xl font-black text-slate-800 italic uppercase leading-none">Loja de Recompensas</h2>
+              <p className="text-slate-400 text-xs font-bold mt-1">Troque seu esforço por mimos</p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              {shopItems.map((item, i) => (
+                <div key={i} className="bg-white p-3 rounded-[2.5rem] shadow-xl shadow-slate-200 border border-slate-100 flex flex-col group overflow-hidden">
+                  <div className="relative rounded-[2rem] overflow-hidden mb-4 aspect-square shadow-inner">
+                    <img src={item.img} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" alt={item.name} />
+                    <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-full font-black text-[10px] text-white tracking-widest border border-white/20">
+                      {item.price} PTS
+                    </div>
+                  </div>
+                  <h4 className="text-[11px] font-black text-slate-800 uppercase px-2 leading-tight mb-4 flex-grow h-8 overflow-hidden">{item.name}</h4>
+                  <button 
+                    onClick={() => buyItem(item)}
+                    disabled={balance < item.price}
+                    className={`w-full py-4 rounded-2xl text-[10px] font-black transition-all border-b-4 ${
+                      balance >= item.price 
+                      ? 'bg-orange-500 text-white shadow-lg border-orange-700 active:translate-y-1 active:border-b-0' 
+                      : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
+                    }`}
+                  >
+                    {balance >= item.price ? 'RESGATAR AGORA' : 'FALTAM PONTOS'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'admin' && (
+          <div className="animate-in fade-in scale-95 duration-300 space-y-6">
+            {!isAdmin ? (
+              <div className="bg-white p-10 rounded-[3rem] shadow-2xl text-center space-y-6 border-b-8 border-orange-500">
+                <div className="w-20 h-20 bg-orange-100 text-orange-500 rounded-full flex items-center justify-center mx-auto shadow-inner">
+                  <Lock size={40} />
+                </div>
+                <div className="space-y-1">
+                  <h2 className="text-2xl font-black italic uppercase">Modo Admin</h2>
+                  <p className="text-slate-400 text-sm font-bold">Acesso restrito ao gestor</p>
+                </div>
+                <input 
+                  type="password" 
+                  placeholder="DIGITE O PIN" 
+                  value={adminPass} 
+                  onChange={e => setAdminPass(e.target.value)} 
+                  className="w-full p-5 bg-slate-50 rounded-2xl text-center font-black text-2xl tracking-[0.5em] border-2 border-slate-100 outline-none focus:border-orange-500 transition-colors" 
+                />
+                <button onClick={() => adminPass === '1234' ? setIsAdmin(true) : alert("PIN Incorreto")} className="w-full py-5 bg-slate-900 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl active:scale-95 transition-all">Desbloquear Painel</button>
+              </div>
+            ) : (
+              <div className="space-y-8 animate-in slide-in-from-bottom-4">
+                <div className="flex justify-between items-center px-2">
+                  <div>
+                    <h2 className="text-2xl font-black italic uppercase leading-none">Gestão Central</h2>
+                    <p className="text-orange-500 font-bold text-[10px] uppercase tracking-widest mt-1">Acesso Autorizado</p>
+                  </div>
+                  <button onClick={() => {setIsAdmin(false); setAdminPass('');}} className="bg-red-50 text-red-500 p-3 rounded-2xl"><LogOut size={20}/></button>
+                </div>
+
+                <div className="bg-amber-50 border-2 border-amber-100 p-6 rounded-[2.5rem] space-y-6 shadow-lg shadow-amber-100/50">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 bg-amber-500 rounded-full animate-pulse" />
+                    <h3 className="font-black text-xs uppercase tracking-widest text-amber-600">Aprovações Pendentes</h3>
+                  </div>
+                  <div className="space-y-3">
+                    {checkins.filter(c => c.status === 'Pendente').map(c => (
+                      <div key={c.id} className="bg-white p-4 rounded-3xl flex justify-between items-center shadow-sm border border-amber-100">
+                        <div className="flex items-center gap-3">
+                          {c.photo && <img src={c.photo} className="w-12 h-12 rounded-2xl object-cover shadow-md" />}
+                          <div>
+                            <p className="font-black text-xs text-slate-800">{c.activity}</p>
+                            <p className="text-[10px] text-orange-500 font-black flex items-center gap-1 uppercase">
+                              <PlusCircle size={10}/> {c.points} pts
+                            </p>
+                          </div>
+                        </div>
+                        <button onClick={() => approveCheckin(c)} className="bg-emerald-500 text-white px-5 py-3 rounded-2xl text-[10px] font-black uppercase shadow-lg shadow-emerald-100 border-b-4 border-emerald-700 active:translate-y-1 active:border-b-0">Aprovar</button>
+                      </div>
+                    ))}
+                    {checkins.filter(c => c.status === 'Pendente').length === 0 && (
+                      <div className="text-center py-6">
+                        <CheckCircle2 size={32} className="mx-auto text-amber-200 mb-2" />
+                        <p className="text-xs text-amber-500 font-bold italic">Tudo em dia! Nenhum treino pendente.</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4">
+                   <button onClick={resetDatabase} className="bg-slate-200 text-slate-500 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest opacity-50">Resetar Sistema para Padrão</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </main>
+
+      {/* NAVBAR INFERIOR */}
+      <nav className="fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-2xl border-t border-slate-100 p-4 flex justify-around items-center max-w-md mx-auto rounded-t-[3rem] shadow-[0_-10px_40px_rgba(0,0,0,0.05)] z-50">
+        <NavBtn icon={<Camera />} active={activeTab === 'feed'} label="Feed" onClick={() => setActiveTab('feed')} />
+        <NavBtn icon={<CheckCircle2 />} active={activeTab === 'metas'} label="Metas" onClick={() => setActiveTab('metas')} />
+        <NavBtn icon={<ShoppingBag />} active={activeTab === 'shop'} label="Loja" onClick={() => setActiveTab('shop')} />
+        <NavBtn icon={<Lock />} active={activeTab === 'admin'} label="Gestão" onClick={() => setActiveTab('admin')} />
+      </nav>
+
+      {/* MODAL DE POSTAGEM */}
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md z-[100] flex items-end justify-center p-0">
+          <div className="bg-white w-full max-w-md rounded-t-[3.5rem] p-8 space-y-6 shadow-2xl animate-in slide-in-from-bottom-full duration-500 overflow-y-auto max-h-[95vh] border-t-8 border-orange-500">
+            <div className="flex justify-between items-center">
+              <div>
+                <h3 className="text-2xl font-black italic uppercase text-slate-800 leading-none">Novo Check-in</h3>
+                <p className="text-slate-400 text-xs font-bold mt-1 tracking-tight">Registre seu esforço diário</p>
+              </div>
+              <button onClick={() => setIsModalOpen(false)} className="bg-slate-100 p-3 rounded-full hover:bg-red-50 hover:text-red-500 transition-colors"><X size={24}/></button>
+            </div>
+            
+            <div className="space-y-6">
+              <div 
+                onClick={() => fileInputRef.current?.click()}
+                className={`w-full aspect-[4/3] rounded-[2.5rem] border-4 border-dashed flex flex-col items-center justify-center transition-all cursor-pointer group relative overflow-hidden ${newCheckin.photo ? 'border-orange-500' : 'border-slate-100 bg-slate-50'}`}
+              >
+                {newCheckin.photo ? (
+                  <>
+                    <img src={newCheckin.photo} className="w-full h-full object-cover rounded-[2rem]" />
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                       <Camera size={40} className="text-white" />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="bg-white p-6 rounded-full shadow-lg text-orange-500 mb-3 group-hover:scale-110 transition-transform">
+                      <Camera size={40} />
+                    </div>
+                    <span className="text-[11px] font-black text-slate-400 uppercase tracking-widest">Tirar foto ou Upload</span>
+                  </>
+                )}
+                <input type="file" accept="image/*" capture="environment" className="hidden" ref={fileInputRef} onChange={handlePhotoUpload} />
+              </div>
+
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase text-slate-400 ml-4 tracking-widest">Qual a atividade?</label>
+                  <select 
+                    className="w-full p-5 bg-slate-50 rounded-3xl outline-none font-bold text-sm border-2 border-transparent focus:border-orange-500 transition-all appearance-none shadow-inner"
+                    value={newCheckin.activity}
+                    onChange={e => setNewCheckin(p => ({...p, activity: e.target.value}))}
+                  >
+                    <option value="">Selecione...</option>
+                    {metas.map((m, i) => <option key={i} value={m.nome}>{m.nome} (+{m.pontos} pts)</option>)}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                   <label className="text-[10px] font-black uppercase text-slate-400 ml-4 tracking-widest">Legenda</label>
+                   <input 
+                    className="w-full p-5 bg-slate-50 rounded-3xl outline-none text-sm border-2 border-transparent focus:border-orange-500 transition-all shadow-inner" 
+                    placeholder="Ex: Treino de perna concluído! ✅" 
+                    value={newCheckin.caption}
+                    onChange={e => setNewCheckin(p => ({...p, caption: e.target.value}))}
+                  />
+                </div>
+              </div>
+
+              <button 
+                onClick={handleAddCheckin}
+                disabled={isProcessing || !newCheckin.activity}
+                className="w-full py-6 bg-gradient-to-r from-orange-500 to-red-600 text-white rounded-[2rem] font-black text-lg shadow-2xl shadow-orange-200 uppercase tracking-[0.2em] disabled:opacity-50 border-b-4 border-red-800 active:translate-y-1 active:border-b-0 transition-all"
+              >
+                {isProcessing ? 'PUBLICANDO...' : 'ENVIAR PARA APROVAÇÃO'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NavBtn({ icon, active, label, onClick }) {
+  return (
+    <button onClick={onClick} className="flex flex-col items-center gap-1.5 min-w-[64px]">
+      <div className={`p-3 rounded-2xl transition-all duration-500 flex items-center justify-center ${
+        active 
+        ? 'bg-orange-500 text-white shadow-xl shadow-orange-200 -translate-y-2 scale-110 rotate-[5deg]' 
+        : 'text-slate-300 hover:text-slate-400'
+      }`}>
+        {React.cloneElement(icon, { size: 22, strokeWidth: active ? 3 : 2 })}
+      </div>
+      <span className={`text-[9px] font-black uppercase tracking-tighter transition-all duration-300 ${active ? 'opacity-100 text-orange-600' : 'opacity-40 text-slate-400'}`}>
+        {label}
+      </span>
+    </button>
+  );
+}
